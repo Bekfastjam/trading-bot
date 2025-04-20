@@ -1,61 +1,64 @@
 #include <iostream>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
 
-static size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* output) {
+// cURL write callback to collect API response
+size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* output) {
     size_t totalSize = size * nmemb;
     output->append((char*)contents, totalSize);
     return totalSize;
 }
 
-std::string readApiKey(const std::string& filename) {
+// Read API key from a file
+std::string read_api_key(const std::string& filename) {
     std::ifstream file(filename);
     std::string key;
-    if (file && std::getline(file, key)) {
-        return key;
-    } else {
-        std::cerr << "Failed to read API key from " << filename << std::endl;
-        exit(1);
-    }
+    std::getline(file, key);
+    return key;
 }
 
-json fetchStockPrice(const std::string& symbol, const std::string& apiKey) {
+int main() {
+    std::string apiKey = read_api_key("alpha.key");
+    std::string symbol = "AAPL"; // You can change this to any symbol
+    std::string url = "https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY"
+                      "&symbol=" + symbol +
+                      "&interval=5min&apikey=" + apiKey;
+
     CURL* curl = curl_easy_init();
     std::string response;
 
     if (curl) {
-        std::string url = "https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=" 
-                          + symbol + "&apikey=" + apiKey;
-
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
 
         CURLcode res = curl_easy_perform(curl);
+        curl_easy_cleanup(curl);
+
         if (res != CURLE_OK) {
-            std::cerr << "CURL error: " << curl_easy_strerror(res) << std::endl;
+            std::cerr << "cURL error: " << curl_easy_strerror(res) << std::endl;
+            return 1;
         }
 
-        curl_easy_cleanup(curl);
-    }
+        try {
+            auto jsonData = json::parse(response);
+            auto timeSeries = jsonData["Time Series (5min)"];
 
-    return json::parse(response);
-}
+            // Get the latest timestamp (first entry)
+            auto latest = timeSeries.begin();
+            std::string timestamp = latest.key();
+            std::string price = latest.value()["1. open"];
 
-int main() {
-    std::string symbol = "AAPL";
-    std::string apiKey = readApiKey("alpha.key");
-
-    json data = fetchStockPrice(symbol, apiKey);
-
-    if (data.contains("Global Quote")) {
-        std::cout << "Price for " << symbol << ": $" << data["Global Quote"]["05. price"] << std::endl;
-    } else {
-        std::cerr << "Failed to get quote. Response: " << data.dump(2) << std::endl;
+            std::cout << "Latest price for " << symbol << " at " << timestamp << ": $" << price << std::endl;
+        } catch (std::exception& e) {
+            std::cerr << "Error parsing JSON: " << e.what() << std::endl;
+            std::cerr << "Raw response:\n" << response << std::endl;
+        }
     }
 
     return 0;
